@@ -6,9 +6,10 @@ import openpyxl
 app = Flask(__name__)
 app.secret_key = "dev-secret-key"  # সেশন ও flash মেসেজের জন্য দরকার — পাবলিশ করার আগে এটা বদলে ফেলুন
 
-# লগইন পাসওয়ার্ড — চাইলে এখানে সরাসরি বদলাতে পারেন,
-# অথবা এনভায়রনমেন্ট ভ্যারিয়েবল APP_PASSWORD সেট করে দিতে পারেন (হোস্টিং সাইটে এটা বেশি নিরাপদ)
-APP_PASSWORD = os.environ.get("APP_PASSWORD", "12345678")
+# দুই ধরনের পাসওয়ার্ড — একটা অ্যাডমিনের জন্য, একটা সাধারণ ভিউয়ারের জন্য
+# চাইলে এখানে সরাসরি বদলাতে পারেন, অথবা Render-এ Environment Variable হিসেবে সেট করতে পারেন (বেশি নিরাপদ)
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+VIEWER_PASSWORD = os.environ.get("VIEWER_PASSWORD", "12345678")
 
 LOGIN_PAGE = """
 <!DOCTYPE html>
@@ -44,8 +45,12 @@ LOGIN_PAGE = """
 def login():
     error = None
     if request.method == "POST":
-        if request.form.get("password") == APP_PASSWORD:
-            session["logged_in"] = True
+        entered = request.form.get("password")
+        if entered == ADMIN_PASSWORD:
+            session["role"] = "admin"
+            return redirect(url_for("home"))
+        elif entered == VIEWER_PASSWORD:
+            session["role"] = "viewer"
             return redirect(url_for("home"))
         error = "পাসওয়ার্ড ভুল হয়েছে, আবার চেষ্টা করুন।"
     return render_template_string(LOGIN_PAGE, error=error)
@@ -53,16 +58,24 @@ def login():
 
 @app.route("/logout")
 def logout():
-    session.pop("logged_in", None)
+    session.pop("role", None)
     return redirect(url_for("login"))
 
 
 @app.before_request
 def require_login():
     # লগইন ও স্ট্যাটিক ফাইল ছাড়া বাকি সব পেজের আগে লগইন চেক করা হচ্ছে
-    if request.endpoint in ("login", "static") or session.get("logged_in"):
+    if request.endpoint in ("login", "static") or session.get("role") in ("admin", "viewer"):
         return None
     return redirect(url_for("login"))
+
+
+def require_admin():
+    """অ্যাডমিন-অনলি রুটের শুরুতে কল করতে হবে। অ্যাডমিন না হলে হোমপেজে পাঠিয়ে দেয়।"""
+    if session.get("role") != "admin":
+        flash("এই কাজটি করার অনুমতি নেই — শুধু অ্যাডমিন পারবেন।")
+        return redirect(url_for("home"))
+    return None
 
 
 DATA_FILE = "reports.json"
@@ -113,8 +126,22 @@ PAGE = """
 <body>
 <div class="container">
     <h1>📊 টার্গেট বনাম অ্যাচিভমেন্ট রিপোর্ট</h1>
-    <p style="text-align:right;"><a href="/logout" style="font-size:13px; color:#666;">🔓 লগআউট</a></p>
+    <p style="text-align:right; font-size:13px; color:#888;">
+        {{ 'অ্যাডমিন হিসেবে লগইন আছেন' if is_admin else 'ভিউয়ার হিসেবে লগইন আছেন' }}
+        &nbsp;|&nbsp; <a href="/logout" style="color:#666;">🔓 লগআউট</a>
+    </p>
 
+    {% with messages = get_flashed_messages() %}
+        {% if messages %}
+        <div class="card">
+            {% for m in messages %}
+            <p style="color: {{ '#27ae60' if 'সফলভাবে' in m or 'মোট' in m else '#e74c3c' }}; font-weight:bold; margin:5px 0;">{{ m }}</p>
+            {% endfor %}
+        </div>
+        {% endif %}
+    {% endwith %}
+
+    {% if is_admin %}
     <div class="card">
         <h3>📁 এক্সেল ফাইল থেকে আপলোড করুন</h3>
         <p style="font-size:13px; color:#666;">
@@ -124,18 +151,16 @@ PAGE = """
             <b>সারি ৩ থেকে:</b> আসল ডেটা<br>
             (GAP ও ACH% কলাম থাকলেও সমস্যা নেই, সেগুলো নিজে থেকে হিসাব করা হয়)
         </p>
-        {% with messages = get_flashed_messages() %}
-            {% if messages %}
-                {% for m in messages %}
-                <p style="color: {{ '#27ae60' if 'সফলভাবে' in m else '#e74c3c' }}; font-weight:bold;">{{ m }}</p>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
         <form method="POST" action="/upload" enctype="multipart/form-data">
             <input type="file" name="excel_file" accept=".xlsx,.xls" required>
             <button type="submit">আপলোড করুন</button>
         </form>
+        <form method="POST" action="/delete-all" style="margin-top:15px;"
+              onsubmit="return confirm('আপনি কি নিশ্চিত? এতে সমস্ত রিপোর্ট ডেটা স্থায়ীভাবে মুছে যাবে!');">
+            <button type="submit" style="background:#e74c3c;">🗑 সব পুরোনো ডেটা মুছে ফেলুন</button>
+        </form>
     </div>
+    {% endif %}
 
     <div class="card">
         <h3>ফিল্টার করুন</h3>
@@ -194,7 +219,7 @@ PAGE = """
             <tr>
                 <th>{{ clp_label }}</th><th>Town</th><th>Outlet Code</th><th>Outlet Name</th><th>Section</th>
                 <th>SR</th><th>FSE</th><th>MAX TGT</th><th>MIN TGT</th><th>ACH</th>
-                <th>GAP</th><th>ACH %</th><th></th>
+                <th>GAP</th><th>ACH %</th>{% if is_admin %}<th></th>{% endif %}
             </tr>
             {% for r in rows %}
             <tr>
@@ -210,7 +235,7 @@ PAGE = """
                 <td>{{ "{:,.0f}".format(r.ach) }}</td>
                 <td>{{ "{:,.0f}".format(r.gap) }}</td>
                 <td class="{{ 'ach-good' if r.ach_pct >= 100 else 'ach-bad' }}">{{ r.ach_pct }}%</td>
-                <td><a class="delete-link" href="/delete/{{ r.id }}">🗑</a></td>
+                {% if is_admin %}<td><a class="delete-link" href="/delete/{{ r.id }}">🗑</a></td>{% endif %}
             </tr>
             {% endfor %}
         </table>
@@ -267,6 +292,7 @@ def home():
         clp_values=sorted({r["extra_value"] for r in reports if r.get("extra_value")}),
         clp_label=clp_label,
         filters={"town": town, "section": section, "sr_name": sr_name, "fse_name": fse_name, "clp": clp},
+        is_admin=(session.get("role") == "admin"),
     )
 
 
@@ -369,6 +395,10 @@ def process_sheet(sheet, existing_by_key, new_id):
 
 @app.route("/upload", methods=["POST"])
 def upload_excel():
+    guard = require_admin()
+    if guard:
+        return guard
+
     file = request.files.get("excel_file")
     if not file or file.filename == "":
         flash("কোনো ফাইল বাছাই করা হয়নি।")
@@ -410,9 +440,27 @@ def upload_excel():
 
 @app.route("/delete/<int:report_id>")
 def delete_report(report_id):
+    guard = require_admin()
+    if guard:
+        return guard
+
     global reports
     reports = [r for r in reports if r["id"] != report_id]
     save_reports(reports)
+    flash("এন্ট্রি মুছে ফেলা হয়েছে।")
+    return redirect(url_for("home"))
+
+
+@app.route("/delete-all", methods=["POST"])
+def delete_all_reports():
+    guard = require_admin()
+    if guard:
+        return guard
+
+    global reports
+    reports = []
+    save_reports(reports)
+    flash("সব পুরোনো ডেটা মুছে ফেলা হয়েছে।")
     return redirect(url_for("home"))
 
 
