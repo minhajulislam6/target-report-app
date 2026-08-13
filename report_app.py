@@ -125,7 +125,7 @@ PAGE = """
 </head>
 <body>
 <div class="container">
-    <h1>📊 টার্গেট বনাম অ্যাচিভমেন্ট রিপোর্ট</h1>
+    <h1>📊 CLP টার্গেট বনাম অ্যাচিভমেন্ট রিপোর্ট</h1>
     <p style="text-align:right; font-size:13px; color:#888;">
         {{ 'অ্যাডমিন হিসেবে লগইন আছেন' if is_admin else 'ভিউয়ার হিসেবে লগইন আছেন' }}
         &nbsp;|&nbsp; <a href="/logout" style="color:#666;">🔓 লগআউট</a>
