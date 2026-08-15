@@ -9,7 +9,7 @@ app.secret_key = "dev-secret-key"  # সেশন ও flash মেসেজে�
 # দুই ধরনের পাসওয়ার্ড — একটা অ্যাডমিনের জন্য, একটা সাধারণ ভিউয়ারের জন্য
 # চাইলে এখানে সরাসরি বদলাতে পারেন, অথবা Render-এ Environment Variable হিসেবে সেট করতে পারেন (বেশি নিরাপদ)
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
-VIEWER_PASSWORD = os.environ.get("VIEWER_PASSWORD", "12345678")
+VIEWER_PASSWORD = os.environ.get("VIEWER_PASSWORD", "view123")
 
 LOGIN_PAGE = """
 <!DOCTYPE html>
@@ -78,19 +78,53 @@ def require_admin():
     return None
 
 
-DATA_FILE = "reports.json"
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+
+def get_db_connection():
+    """Supabase (PostgreSQL) ডাটাবেসের সাথে একটা নতুন সংযোগ তৈরি করে।"""
+    import psycopg2
+    return psycopg2.connect(DATABASE_URL)
 
 
 def load_reports():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
+    """ডাটাবেস থেকে সব রিপোর্ট লোড করে। DATABASE_URL সেট না থাকলে খালি লিস্ট রিটার্ন করে।"""
+    if not DATABASE_URL:
+        return []
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM app_data WHERE key = %s", ("reports",))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if row and row[0]:
+            return json.loads(row[0])
+        return []
+    except Exception as e:
+        print("ডাটাবেস থেকে লোড করতে সমস্যা হয়েছে:", e)
+        return []
 
 
 def save_reports(reports):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(reports, f, ensure_ascii=False, indent=2)
+    """সব রিপোর্ট ডাটাবেসে সেভ করে।"""
+    if not DATABASE_URL:
+        return
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO app_data (key, value) VALUES (%s, %s)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """,
+            ("reports", json.dumps(reports, ensure_ascii=False)),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("ডাটাবেসে সেভ করতে সমস্যা হয়েছে:", e)
 
 
 reports = load_reports()
@@ -125,7 +159,7 @@ PAGE = """
 </head>
 <body>
 <div class="container">
-    <h1>📊 CLP টার্গেট বনাম অ্যাচিভমেন্ট রিপোর্ট</h1>
+    <h1>📊 টার্গেট বনাম অ্যাচিভমেন্ট রিপোর্ট</h1>
     <p style="text-align:right; font-size:13px; color:#888;">
         {{ 'অ্যাডমিন হিসেবে লগইন আছেন' if is_admin else 'ভিউয়ার হিসেবে লগইন আছেন' }}
         &nbsp;|&nbsp; <a href="/logout" style="color:#666;">🔓 লগআউট</a>
