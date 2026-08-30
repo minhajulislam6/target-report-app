@@ -135,7 +135,7 @@ PAGE = """
 <head>
     <meta charset="UTF-8">
     <title>টার্গেট বনাম অ্যাচিভমেন্ট রিপোর্ট</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
     <style>
         body { font-family: Arial, sans-serif; background: #f4f4f9; padding: 30px; }
         .container { max-width: 1100px; margin: 0 auto; }
@@ -344,27 +344,32 @@ PAGE = """
 
 {% if chart_labels %}
 <script>
-    const ctx = document.getElementById('townChart').getContext('2d');
-    new Chart(ctx, {
-        type: 'bar',
-        data: {
-            labels: {{ chart_labels | tojson }},
-            datasets: [{
-                label: 'ACH %',
-                data: {{ chart_values | tojson }},
-                backgroundColor: {{ chart_values | tojson }}.map(v => v >= 100 ? '#27ae60' : '#e74c3c')
-            }]
-        },
-        options: {
-            indexAxis: 'y',
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: { legend: { display: false } },
-            scales: {
-                x: { beginAtZero: true, ticks: { callback: value => value + '%' } }
+    if (typeof Chart === 'undefined') {
+        document.getElementById('townChart').outerHTML =
+            '<p style="text-align:center; color:#e74c3c;">⚠️ চার্ট লাইব্রেরি লোড করা যায়নি (ইন্টারনেট সংযোগ যাচাই করুন বা পেজ রিফ্রেশ করুন)।</p>';
+    } else {
+        const ctx = document.getElementById('townChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: {{ chart_labels | tojson }},
+                datasets: [{
+                    label: 'ACH %',
+                    data: {{ chart_values | tojson }},
+                    backgroundColor: {{ chart_values | tojson }}.map(v => v >= 100 ? '#27ae60' : '#e74c3c')
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { beginAtZero: true, ticks: { callback: value => value + '%' } }
+                }
             }
-        }
-    });
+        });
+    }
 </script>
 {% endif %}
 </body>
