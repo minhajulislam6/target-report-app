@@ -135,7 +135,6 @@ PAGE = """
 <head>
     <meta charset="UTF-8">
     <title>টার্গেট বনাম অ্যাচিভমেন্ট রিপোর্ট</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
     <style>
         body { font-family: Arial, sans-serif; background: #f4f4f9; padding: 30px; }
         .container { max-width: 1100px; margin: 0 auto; }
@@ -162,7 +161,14 @@ PAGE = """
         .summary-box .value { font-size: 22px; font-weight: bold; color: #2c3e50; }
         .summary-box.pct-good .value { color: #27ae60; }
         .summary-box.pct-bad .value { color: #e74c3c; }
-        .chart-wrap { position: relative; height: 320px; margin-top: 10px; }
+        .chart-wrap { margin-top: 10px; }
+        .bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        .bar-label { width: 220px; font-size: 13px; color: #333; text-align: right; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .bar-track { flex: 1; background: #eef1f5; border-radius: 4px; height: 22px; position: relative; overflow: hidden; }
+        .bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+        .bar-fill.good { background: #27ae60; }
+        .bar-fill.bad { background: #e74c3c; }
+        .bar-value { width: 60px; font-size: 13px; font-weight: bold; text-align: left; flex-shrink: 0; }
         .program-list { display: flex; flex-wrap: wrap; gap: 8px; }
         .program-chip { padding: 7px 14px; border-radius: 20px; background: #eef2f7; color: #2c3e50; text-decoration: none; font-size: 13px; border: 1px solid #dde3ea; }
         .program-chip:hover { background: #dbe6f5; }
@@ -250,11 +256,19 @@ PAGE = """
     </div>
     {% endif %}
 
-    {% if chart_labels %}
+    {% if chart_data %}
     <div class="card">
         <h3>🧑‍💼 SR-ভিত্তিক ACH % তুলনা (ভালো থেকে খারাপ ক্রমে)</h3>
-        <div class="chart-wrap" style="height: {{ (chart_labels|length * 35 + 60) if chart_labels|length > 8 else 320 }}px;">
-            <canvas id="townChart"></canvas>
+        <div class="chart-wrap">
+            {% for item in chart_data %}
+            <div class="bar-row">
+                <div class="bar-label" title="{{ item.label }}">{{ item.label }}</div>
+                <div class="bar-track">
+                    <div class="bar-fill {{ 'good' if item.value >= 100 else 'bad' }}" style="width: {{ item.width_pct }}%;"></div>
+                </div>
+                <div class="bar-value">{{ item.value }}%</div>
+            </div>
+            {% endfor %}
         </div>
     </div>
     {% endif %}
@@ -341,37 +355,6 @@ PAGE = """
         {% endif %}
     </div>
 </div>
-
-{% if chart_labels %}
-<script>
-    if (typeof Chart === 'undefined') {
-        document.getElementById('townChart').outerHTML =
-            '<p style="text-align:center; color:#e74c3c;">⚠️ চার্ট লাইব্রেরি লোড করা যায়নি (ইন্টারনেট সংযোগ যাচাই করুন বা পেজ রিফ্রেশ করুন)।</p>';
-    } else {
-        const ctx = document.getElementById('townChart').getContext('2d');
-        new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels: {{ chart_labels | tojson }},
-                datasets: [{
-                    label: 'ACH %',
-                    data: {{ chart_values | tojson }},
-                    backgroundColor: {{ chart_values | tojson }}.map(v => v >= 100 ? '#27ae60' : '#e74c3c')
-                }]
-            },
-            options: {
-                indexAxis: 'y',
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                    x: { beginAtZero: true, ticks: { callback: value => value + '%' } }
-                }
-            }
-        });
-    }
-</script>
-{% endif %}
 </body>
 </html>
 """
@@ -438,8 +421,12 @@ def home():
     ]
     sr_pct_list.sort(key=lambda x: x[1], reverse=True)  # ভালো পারফরম্যান্স আগে
 
-    chart_labels = [s for s, _ in sr_pct_list]
-    chart_values = [p for _, p in sr_pct_list]
+    # প্রতিটা বারের প্রস্থ (%) হিসাব করা হচ্ছে — সবচেয়ে বেশি মান বা ১০০%, যেটা বড় সেটার সাপেক্ষে
+    scale_max = max([p for _, p in sr_pct_list] + [100]) if sr_pct_list else 100
+    chart_data = [
+        {"label": s, "value": p, "width_pct": round(min(p / scale_max * 100, 100), 1)}
+        for s, p in sr_pct_list
+    ]
 
     # প্রোগ্রাম (CLP) লিস্ট — ক্লিক করলে সেই প্রোগ্রামের ডেটা অনুযায়ী পুরো পেজ ফিল্টার হবে
     from urllib.parse import urlencode
@@ -468,8 +455,7 @@ def home():
         filters={"town": town, "section": section, "sr_name": sr_name, "fse_name": fse_name, "clp": clp},
         is_admin=(session.get("role") == "admin"),
         summary=summary,
-        chart_labels=chart_labels,
-        chart_values=chart_values,
+        chart_data=chart_data,
     )
 
 
