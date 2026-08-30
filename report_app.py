@@ -134,7 +134,8 @@ PAGE = """
 <html lang="bn">
 <head>
     <meta charset="UTF-8">
-    <title>CLP টার্গেট বনাম অ্যাচিভমেন্ট রিপোর্ট</title>
+    <title>টার্গেট বনাম অ্যাচিভমেন্ট রিপোর্ট</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
     <style>
         body { font-family: Arial, sans-serif; background: #f4f4f9; padding: 30px; }
         .container { max-width: 1100px; margin: 0 auto; }
@@ -155,11 +156,18 @@ PAGE = """
         .empty { text-align: center; color: #999; padding: 20px; }
         .delete-link { color: #e74c3c; text-decoration: none; font-size: 13px; }
         .clear-link { display: inline-block; margin-top: 8px; font-size: 13px; color: #666; }
+        .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; }
+        .summary-box { background: #f8f9fb; border-radius: 8px; padding: 15px; text-align: center; }
+        .summary-box .label { font-size: 12px; color: #888; margin-bottom: 5px; }
+        .summary-box .value { font-size: 22px; font-weight: bold; color: #2c3e50; }
+        .summary-box.pct-good .value { color: #27ae60; }
+        .summary-box.pct-bad .value { color: #e74c3c; }
+        .chart-wrap { position: relative; height: 320px; margin-top: 10px; }
     </style>
 </head>
 <body>
 <div class="container">
-    <h1>📊 CLP টার্গেট বনাম অ্যাচিভমেন্ট রিপোর্ট</h1>
+    <h1>📊 টার্গেট বনাম অ্যাচিভমেন্ট রিপোর্ট</h1>
     <p style="text-align:right; font-size:13px; color:#888;">
         {{ 'অ্যাডমিন হিসেবে লগইন আছেন' if is_admin else 'ভিউয়ার হিসেবে লগইন আছেন' }}
         &nbsp;|&nbsp; <a href="/logout" style="color:#666;">🔓 লগআউট</a>
@@ -193,6 +201,45 @@ PAGE = """
               onsubmit="return confirm('আপনি কি নিশ্চিত? এতে সমস্ত রিপোর্ট ডেটা স্থায়ীভাবে মুছে যাবে!');">
             <button type="submit" style="background:#e74c3c;">🗑 সব পুরোনো ডেটা মুছে ফেলুন</button>
         </form>
+    </div>
+    {% endif %}
+
+    <div class="card">
+        <h3>📈 সারসংক্ষেপ {% if filters.town or filters.section or filters.sr_name or filters.fse_name or filters.clp %}(বর্তমান ফিল্টার অনুযায়ী){% endif %}</h3>
+        <div class="summary-grid">
+            <div class="summary-box">
+                <div class="label">মোট আউটলেট</div>
+                <div class="value">{{ summary.count }}</div>
+            </div>
+            <div class="summary-box">
+                <div class="label">মোট MAX TGT</div>
+                <div class="value">{{ "{:,.0f}".format(summary.max_tgt) }}</div>
+            </div>
+            <div class="summary-box">
+                <div class="label">মোট MIN TGT</div>
+                <div class="value">{{ "{:,.0f}".format(summary.min_tgt) }}</div>
+            </div>
+            <div class="summary-box">
+                <div class="label">মোট ACH</div>
+                <div class="value">{{ "{:,.0f}".format(summary.ach) }}</div>
+            </div>
+            <div class="summary-box">
+                <div class="label">মোট GAP</div>
+                <div class="value">{{ "{:,.0f}".format(summary.gap) }}</div>
+            </div>
+            <div class="summary-box {{ 'pct-good' if summary.ach_pct >= 100 else 'pct-bad' }}">
+                <div class="label">সার্বিক ACH %</div>
+                <div class="value">{{ summary.ach_pct }}%</div>
+            </div>
+        </div>
+    </div>
+
+    {% if chart_labels %}
+    <div class="card">
+        <h3>🏘️ টাউন-ভিত্তিক ACH % তুলনা</h3>
+        <div class="chart-wrap">
+            <canvas id="townChart"></canvas>
+        </div>
     </div>
     {% endif %}
 
@@ -278,6 +325,31 @@ PAGE = """
         {% endif %}
     </div>
 </div>
+
+{% if chart_labels %}
+<script>
+    const ctx = document.getElementById('townChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: {{ chart_labels | tojson }},
+            datasets: [{
+                label: 'ACH %',
+                data: {{ chart_values | tojson }},
+                backgroundColor: {{ chart_values | tojson }}.map(v => v >= 100 ? '#27ae60' : '#e74c3c')
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                y: { beginAtZero: true, ticks: { callback: value => value + '%' } }
+            }
+        }
+    });
+</script>
+{% endif %}
 </body>
 </html>
 """
@@ -316,6 +388,34 @@ def home():
     # সবশেষ আপলোড হওয়া ফাইলের A1 লেবেলটাকে ফিল্টারের নাম হিসেবে দেখানো হচ্ছে
     clp_label = reports[-1]["extra_label"] if reports and reports[-1].get("extra_label") else "CLP Name"
 
+    # সারসংক্ষেপ (সামারি) হিসাব করা হচ্ছে — বর্তমান ফিল্টার করা রো-গুলোর ওপর ভিত্তি করে
+    total_max = sum(r["max_tgt"] for r in rows)
+    total_min = sum(r["min_tgt"] for r in rows)
+    total_ach = sum(r["ach"] for r in rows)
+    summary = {
+        "count": len(rows),
+        "max_tgt": total_max,
+        "min_tgt": total_min,
+        "ach": total_ach,
+        "gap": total_min - total_ach,
+        "ach_pct": round((total_ach / total_min * 100), 1) if total_min else 0,
+    }
+
+    # টাউন অনুযায়ী গ্রুপ করে ACH% হিসাব করা হচ্ছে (চার্টের জন্য)
+    town_totals = {}
+    for r in rows:
+        t = r["town"]
+        if t not in town_totals:
+            town_totals[t] = {"min_tgt": 0, "ach": 0}
+        town_totals[t]["min_tgt"] += r["min_tgt"]
+        town_totals[t]["ach"] += r["ach"]
+
+    chart_labels = sorted(town_totals.keys())
+    chart_values = [
+        round((town_totals[t]["ach"] / town_totals[t]["min_tgt"] * 100), 1) if town_totals[t]["min_tgt"] else 0
+        for t in chart_labels
+    ]
+
     return render_template_string(
         PAGE,
         rows=rows,
@@ -327,6 +427,9 @@ def home():
         clp_label=clp_label,
         filters={"town": town, "section": section, "sr_name": sr_name, "fse_name": fse_name, "clp": clp},
         is_admin=(session.get("role") == "admin"),
+        summary=summary,
+        chart_labels=chart_labels,
+        chart_values=chart_values,
     )
 
 
