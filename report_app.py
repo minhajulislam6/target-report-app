@@ -568,7 +568,7 @@ def upload_excel():
         return redirect(url_for("home"))
 
     try:
-        workbook = openpyxl.load_workbook(file, data_only=True)
+        workbook = openpyxl.load_workbook(file, data_only=True, read_only=True)
     except Exception:
         flash("ফাইলটি পড়া যায়নি। এটি একটি সঠিক .xlsx ফাইল কিনা যাচাই করুন।")
         return redirect(url_for("home"))
@@ -590,6 +590,8 @@ def upload_excel():
         total_updated += updated
         total_added += added
         processed_sheets += 1
+
+    workbook.close()  # read_only মোডে ফাইল বন্ধ করে মেমোরি খালি করে দেওয়া হচ্ছে
 
     save_reports(reports)
 
