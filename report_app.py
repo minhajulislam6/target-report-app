@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from flask import Flask, render_template_string, request, redirect, url_for, flash, session
 import openpyxl
 
@@ -70,6 +71,13 @@ def require_login():
     return redirect(url_for("login"))
 
 
+@app.before_request
+def auto_refresh():
+    # হোমপেজ খোলার সময় ডাটাবেস থেকে সর্বশেষ ডেটা নিয়ে আসা হয় (প্রতি ৩০ সেকেন্ডে একবার)
+    if request.endpoint == "home":
+        refresh_reports()
+
+
 def require_admin():
     """অ্যাডমিন-অনলি রুটের শুরুতে কল করতে হবে। অ্যাডমিন না হলে হোমপেজে পাঠিয়ে দেয়।"""
     if session.get("role") != "admin":
@@ -80,54 +88,90 @@ def require_admin():
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
+# ডাটাবেস থেকে ডেটা কতক্ষণ মেমোরিতে রাখা হবে (সেকেন্ড) — এরপর আবার ডাটাবেস থেকে নতুন করে পড়া হয়
+CACHE_SECONDS = 30
+
+reports = []            # মেমোরিতে থাকা বর্তমান রিপোর্ট ডেটা
+db_loaded_ok = False    # ডাটাবেস থেকে সফলভাবে ডেটা পড়া গেছে কিনা
+last_db_error = None    # সর্বশেষ ডাটাবেস এরর (থাকলে)
+last_load_time = 0      # সর্বশেষ কখন ডাটাবেস থেকে পড়া হয়েছে
+
 
 def get_db_connection():
     """Supabase (PostgreSQL) ডাটাবেসের সাথে একটা নতুন সংযোগ তৈরি করে।"""
     import psycopg2
-    return psycopg2.connect(DATABASE_URL)
+    return psycopg2.connect(DATABASE_URL, connect_timeout=10)
 
 
-def load_reports():
-    """ডাটাবেস থেকে সব রিপোর্ট লোড করে। DATABASE_URL সেট না থাকলে খালি লিস্ট রিটার্ন করে।"""
+def refresh_reports(force=False):
+    """
+    ডাটাবেস থেকে রিপোর্ট পড়ে মেমোরিতে আপডেট করে। সফল হলে True, ব্যর্থ হলে False।
+    ব্যর্থ হলে মেমোরির পুরনো ডেটা অক্ষত থাকে (খালি করে ফেলা হয় না)।
+    """
+    global reports, db_loaded_ok, last_db_error, last_load_time
+
     if not DATABASE_URL:
-        return []
+        last_db_error = "DATABASE_URL সেট করা নেই — ডেটা স্থায়ীভাবে সেভ হবে না।"
+        return False
+
+    if not force and db_loaded_ok and (time.time() - last_load_time) < CACHE_SECONDS:
+        return True
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        # টেবিল না থাকলে নিজে থেকেই তৈরি করে নেবে
+        cur.execute("CREATE TABLE IF NOT EXISTS app_data (key text PRIMARY KEY, value text)")
+        conn.commit()
         cur.execute("SELECT value FROM app_data WHERE key = %s", ("reports",))
         row = cur.fetchone()
         cur.close()
         conn.close()
-        if row and row[0]:
-            return json.loads(row[0])
-        return []
+
+        reports = json.loads(row[0]) if row and row[0] else []
+        db_loaded_ok = True
+        last_db_error = None
+        last_load_time = time.time()
+        return True
     except Exception as e:
+        last_db_error = str(e)
         print("ডাটাবেস থেকে লোড করতে সমস্যা হয়েছে:", e)
-        return []
+        return False
 
 
-def save_reports(reports):
-    """সব রিপোর্ট ডাটাবেসে সেভ করে।"""
+def save_reports(data):
+    """সব রিপোর্ট ডাটাবেসে সেভ করে। সফল হলে True, ব্যর্থ হলে False রিটার্ন করে।"""
+    global last_db_error, last_load_time
+
     if not DATABASE_URL:
-        return
+        last_db_error = "DATABASE_URL সেট করা নেই — ডেটা স্থায়ীভাবে সেভ হবে না।"
+        return False
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS app_data (key text PRIMARY KEY, value text)")
         cur.execute(
             """
             INSERT INTO app_data (key, value) VALUES (%s, %s)
             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
             """,
-            ("reports", json.dumps(reports, ensure_ascii=False)),
+            ("reports", json.dumps(data, ensure_ascii=False)),
         )
         conn.commit()
         cur.close()
         conn.close()
+        last_db_error = None
+        last_load_time = time.time()
+        return True
     except Exception as e:
+        last_db_error = str(e)
         print("ডাটাবেসে সেভ করতে সমস্যা হয়েছে:", e)
+        return False
 
 
-reports = load_reports()
+# অ্যাপ চালু হওয়ার সময় একবার ডাটাবেস থেকে ডেটা লোড করা হচ্ছে
+refresh_reports(force=True)
 
 PAGE = """
 <!DOCTYPE html>
@@ -180,18 +224,26 @@ PAGE = """
     <h1>📊 টার্গেট বনাম অ্যাচিভমেন্ট রিপোর্ট</h1>
     <p style="text-align:right; font-size:13px; color:#888;">
         {{ 'অ্যাডমিন হিসেবে লগইন আছেন' if is_admin else 'ভিউয়ার হিসেবে লগইন আছেন' }}
+        {% if is_admin %}&nbsp;|&nbsp; <a href="/status" style="color:#666;">🩺 ডাটাবেস স্ট্যাটাস</a>{% endif %}
         &nbsp;|&nbsp; <a href="/logout" style="color:#666;">🔓 লগআউট</a>
     </p>
 
-    {% with messages = get_flashed_messages() %}
+    {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
         <div class="card">
-            {% for m in messages %}
-            <p style="color: {{ '#27ae60' if 'সফলভাবে' in m or 'মোট' in m else '#e74c3c' }}; font-weight:bold; margin:5px 0;">{{ m }}</p>
+            {% for cat, m in messages %}
+            <p style="color: {{ '#27ae60' if cat == 'ok' else '#e74c3c' }}; font-weight:bold; margin:5px 0;">{{ m }}</p>
             {% endfor %}
         </div>
         {% endif %}
     {% endwith %}
+
+    {% if is_admin and db_warning %}
+    <div class="card" style="border-left: 5px solid #e74c3c;">
+        <p style="color:#e74c3c; font-weight:bold; margin:0;">⚠️ ডাটাবেস সমস্যা: {{ db_warning }}</p>
+        <p style="font-size:13px; color:#666; margin:6px 0 0;">এই অবস্থায় ডেটা স্থায়ীভাবে সেভ নাও হতে পারে। বিস্তারিত দেখতে <a href="/status">স্ট্যাটাস পেজ</a> খুলুন।</p>
+    </div>
+    {% endif %}
 
     {% if is_admin %}
     <div class="card">
@@ -454,6 +506,7 @@ def home():
         clear_clp_url=clear_clp_url,
         filters={"town": town, "section": section, "sr_name": sr_name, "fse_name": fse_name, "clp": clp},
         is_admin=(session.get("role") == "admin"),
+        db_warning=last_db_error,
         summary=summary,
         chart_data=chart_data,
     )
@@ -567,6 +620,11 @@ def upload_excel():
         flash("কোনো ফাইল বাছাই করা হয়নি।")
         return redirect(url_for("home"))
 
+    # আপলোডের আগে ডাটাবেস থেকে সর্বশেষ ডেটা আনা হচ্ছে — না পারলে আপলোড বাতিল (পুরনো ডেটা সুরক্ষিত রাখতে)
+    if not refresh_reports(force=True):
+        flash(f"⚠️ ডাটাবেসের সাথে সংযোগ করা যায়নি, তাই আপলোড বাতিল করা হয়েছে। কারণ: {last_db_error}")
+        return redirect(url_for("home"))
+
     try:
         workbook = openpyxl.load_workbook(file, data_only=True, read_only=True)
     except Exception:
@@ -593,10 +651,10 @@ def upload_excel():
 
     workbook.close()  # read_only মোডে ফাইল বন্ধ করে মেমোরি খালি করে দেওয়া হচ্ছে
 
-    save_reports(reports)
-
-    summary = f"মোট {processed_sheets} টি শীট থেকে {total_updated} টি এন্ট্রি আপডেট এবং {total_added} টি নতুন এন্ট্রি যোগ হয়েছে।"
-    flash(summary)
+    if save_reports(reports):
+        flash(f"মোট {processed_sheets} টি শীট থেকে {total_updated} টি এন্ট্রি আপডেট এবং {total_added} টি নতুন এন্ট্রি যোগ হয়েছে এবং ডাটাবেসে সেভ হয়েছে।", "ok")
+    else:
+        flash(f"❌ ডেটা ডাটাবেসে সেভ হয়নি! সার্ভার রিস্টার্ট হলে এই ডেটা হারিয়ে যাবে। কারণ: {last_db_error}")
     for err in sheet_errors:
         flash(err)
 
@@ -609,10 +667,16 @@ def delete_report(report_id):
     if guard:
         return guard
 
+    if not refresh_reports(force=True):
+        flash(f"⚠️ ডাটাবেসের সাথে সংযোগ করা যায়নি, তাই মোছা হয়নি। কারণ: {last_db_error}")
+        return redirect(url_for("home"))
+
     global reports
     reports = [r for r in reports if r["id"] != report_id]
-    save_reports(reports)
-    flash("এন্ট্রি মুছে ফেলা হয়েছে।")
+    if save_reports(reports):
+        flash("এন্ট্রি মুছে ফেলা হয়েছে।", "ok")
+    else:
+        flash(f"❌ ডাটাবেসে সেভ হয়নি। কারণ: {last_db_error}")
     return redirect(url_for("home"))
 
 
@@ -622,11 +686,89 @@ def delete_all_reports():
     if guard:
         return guard
 
+    if not refresh_reports(force=True):
+        flash(f"⚠️ ডাটাবেসের সাথে সংযোগ করা যায়নি, তাই মোছা হয়নি। কারণ: {last_db_error}")
+        return redirect(url_for("home"))
+
     global reports
     reports = []
-    save_reports(reports)
-    flash("সব পুরোনো ডেটা মুছে ফেলা হয়েছে।")
+    if save_reports(reports):
+        flash("সব পুরোনো ডেটা মুছে ফেলা হয়েছে।", "ok")
+    else:
+        flash(f"❌ ডাটাবেসে সেভ হয়নি। কারণ: {last_db_error}")
     return redirect(url_for("home"))
+
+
+STATUS_PAGE = """
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8">
+    <title>ডাটাবেস স্ট্যাটাস</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f4f9; padding: 30px; }
+        .box { max-width: 700px; margin: 0 auto; background: white; padding: 25px 30px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); }
+        h2 { color: #2c3e50; margin-top: 0; }
+        td { padding: 8px 10px; border-bottom: 1px solid #eee; font-size: 14px; vertical-align: top; }
+        td:first-child { color: #666; width: 45%; }
+        .ok { color: #27ae60; font-weight: bold; }
+        .bad { color: #e74c3c; font-weight: bold; word-break: break-word; }
+    </style>
+</head>
+<body>
+<div class="box">
+    <h2>🩺 ডাটাবেস স্ট্যাটাস</h2>
+    <table>
+        {% for label, value, good in rows %}
+        <tr><td>{{ label }}</td><td class="{{ 'ok' if good else 'bad' }}">{{ value }}</td></tr>
+        {% endfor %}
+    </table>
+    <p><a href="/">← হোমপেজে ফিরুন</a></p>
+</div>
+</body>
+</html>
+"""
+
+
+@app.route("/status")
+def status():
+    guard = require_admin()
+    if guard:
+        return guard
+
+    from urllib.parse import urlparse
+    rows = []
+    has_url = bool(DATABASE_URL)
+    rows.append(("DATABASE_URL সেট আছে?", "হ্যাঁ" if has_url else "না — Render-এ Environment Variable যোগ করুন", has_url))
+
+    if has_url:
+        try:
+            host = urlparse(DATABASE_URL).hostname
+        except Exception:
+            host = "(পড়া যায়নি)"
+        rows.append(("ডাটাবেস হোস্ট", host or "(পড়া যায়নি)", True))
+
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("CREATE TABLE IF NOT EXISTS app_data (key text PRIMARY KEY, value text)")
+            conn.commit()
+            cur.execute("SELECT value FROM app_data WHERE key = %s", ("reports",))
+            row = cur.fetchone()
+            cur.close()
+            conn.close()
+            stored = json.loads(row[0]) if row and row[0] else []
+            rows.append(("ডাটাবেসে সংযোগ", "সফল ✅", True))
+            rows.append(("ডাটাবেসে সেভ করা এন্ট্রি", str(len(stored)), True))
+            size_kb = round(len(row[0]) / 1024, 1) if row and row[0] else 0
+            rows.append(("ডাটাবেসে সেভ করা ডেটার আকার", f"{size_kb} KB", True))
+        except Exception as e:
+            rows.append(("ডাটাবেসে সংযোগ", f"ব্যর্থ ❌ — {e}", False))
+
+    rows.append(("এই মুহূর্তে মেমোরিতে থাকা এন্ট্রি", str(len(reports)), True))
+    rows.append(("সর্বশেষ ডাটাবেস এরর", last_db_error or "নেই", last_db_error is None))
+
+    return render_template_string(STATUS_PAGE, rows=rows)
 
 
 if __name__ == "__main__":
