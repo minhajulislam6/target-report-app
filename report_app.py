@@ -10,7 +10,7 @@ app.secret_key = "dev-secret-key"  # সেশন ও flash মেসেজে�
 # দুই ধরনের পাসওয়ার্ড — একটা অ্যাডমিনের জন্য, একটা সাধারণ ভিউয়ারের জন্য
 # চাইলে এখানে সরাসরি বদলাতে পারেন, অথবা Render-এ Environment Variable হিসেবে সেট করতে পারেন (বেশি নিরাপদ)
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
-VIEWER_PASSWORD = os.environ.get("VIEWER_PASSWORD", "view123")
+VIEWER_PASSWORD = os.environ.get("VIEWER_PASSWORD", "12345678")
 
 LOGIN_PAGE = """
 <!DOCTYPE html>
