@@ -205,10 +205,6 @@ PAGE = """
         .summary-box .value { font-size: 22px; font-weight: bold; color: #2c3e50; }
         .summary-box.pct-good .value { color: #27ae60; }
         .summary-box.pct-bad .value { color: #e74c3c; }
-        .program-list { display: flex; flex-wrap: wrap; gap: 8px; }
-        .program-chip { padding: 7px 14px; border-radius: 20px; background: #eef2f7; color: #2c3e50; text-decoration: none; font-size: 13px; border: 1px solid #dde3ea; }
-        .program-chip:hover { background: #dbe6f5; }
-        .program-chip.active { background: #3498db; color: white; border-color: #3498db; }
         .table-scroll { overflow-x: auto; }
         tr.prog-row td { background: #eaf1fb; font-weight: bold; color: #2c3e50; }
         td.officer-name { padding-left: 28px; }
@@ -292,18 +288,6 @@ PAGE = """
             </div>
         </div>
     </div>
-
-    {% if program_links %}
-    <div class="card">
-        <h3>📋 প্রোগ্রাম লিস্ট ({{ clp_label }})</h3>
-        <div class="program-list">
-            <a class="program-chip {{ 'active' if not filters.clp }}" href="{{ clear_clp_url }}">সব প্রোগ্রাম</a>
-            {% for p in program_links %}
-            <a class="program-chip {{ 'active' if p.active }}" href="{{ p.url }}">{{ p.value }}</a>
-            {% endfor %}
-        </div>
-    </div>
-    {% endif %}
 
     {% if officer_summary %}
     <div class="card">
@@ -503,19 +487,9 @@ def home():
         "ach_pct": round((total_ach / total_min * 100), 1) if total_min else 0,
     }
 
-    # প্রোগ্রাম (CLP) লিস্ট — ক্লিক করলে সেই প্রোগ্রামের ডেটা অনুযায়ী পুরো পেজ ফিল্টার হবে
+    # ফিল্টার ড্রপডাউনের জন্য সব প্রোগ্রামের (CLP) নাম
     from urllib.parse import urlencode
     all_clp_values = sorted({r["extra_value"] for r in reports if r.get("extra_value")})
-    program_links = []
-    for c in all_clp_values:
-        args = {"town": town, "section": section, "sr_name": sr_name, "fse_name": fse_name, "clp": c, "sr_prog": sr_prog}
-        args = {k: v for k, v in args.items() if v}
-        program_links.append({"value": c, "url": "/?" + urlencode(args), "active": c == clp})
-
-    # "সব প্রোগ্রাম" লিংক — clp ফিল্টার সরিয়ে বাকি ফিল্টার রেখে দেখাবে
-    clear_clp_args = {k: v for k, v in {"town": town, "section": section, "sr_name": sr_name, "fse_name": fse_name, "sr_prog": sr_prog}.items() if v}
-    clear_clp_url = "/?" + urlencode(clear_clp_args) if clear_clp_args else "/"
-
     # প্রোগ্রাম অনুযায়ী সেলস অফিসারের আউটলেট সংখ্যা ও টার্গেট-অর্জিত আউটলেট সংখ্যা
     # "টার্গেট অর্জিত" = ACH >= MIN TGT (MIN TGT শূন্য হলে অর্জিত ধরা হয় না)
     officer_field = "sr_name"
@@ -563,8 +537,6 @@ def home():
         fse_names=sorted({r["fse_name"] for r in reports}),
         clp_values=all_clp_values,
         clp_label=clp_label,
-        program_links=program_links,
-        clear_clp_url=clear_clp_url,
         filters={"town": town, "section": section, "sr_name": sr_name, "fse_name": fse_name, "clp": clp},
         is_admin=(session.get("role") == "admin"),
         db_warning=last_db_error,
