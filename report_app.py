@@ -10,7 +10,7 @@ app.secret_key = "dev-secret-key"  # সেশন ও flash মেসেজে�
 # দুই ধরনের পাসওয়ার্ড — একটা অ্যাডমিনের জন্য, একটা সাধারণ ভিউয়ারের জন্য
 # চাইলে এখানে সরাসরি বদলাতে পারেন, অথবা Render-এ Environment Variable হিসেবে সেট করতে পারেন (বেশি নিরাপদ)
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
-VIEWER_PASSWORD = os.environ.get("VIEWER_PASSWORD", "12345678")
+VIEWER_PASSWORD = os.environ.get("VIEWER_PASSWORD", "view123")
 
 LOGIN_PAGE = """
 <!DOCTYPE html>
@@ -205,14 +205,6 @@ PAGE = """
         .summary-box .value { font-size: 22px; font-weight: bold; color: #2c3e50; }
         .summary-box.pct-good .value { color: #27ae60; }
         .summary-box.pct-bad .value { color: #e74c3c; }
-        .chart-wrap { margin-top: 10px; }
-        .bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-        .bar-label { width: 220px; font-size: 13px; color: #333; text-align: right; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .bar-track { flex: 1; background: #eef1f5; border-radius: 4px; height: 22px; position: relative; overflow: hidden; }
-        .bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
-        .bar-fill.good { background: #27ae60; }
-        .bar-fill.bad { background: #e74c3c; }
-        .bar-value { width: 60px; font-size: 13px; font-weight: bold; text-align: left; flex-shrink: 0; }
         .program-list { display: flex; flex-wrap: wrap; gap: 8px; }
         .program-chip { padding: 7px 14px; border-radius: 20px; background: #eef2f7; color: #2c3e50; text-decoration: none; font-size: 13px; border: 1px solid #dde3ea; }
         .program-chip:hover { background: #dbe6f5; }
@@ -365,23 +357,6 @@ PAGE = """
     </div>
     {% endif %}
 
-    {% if chart_data %}
-    <div class="card">
-        <h3>🧑‍💼 SR-ভিত্তিক ACH % তুলনা (ভালো থেকে খারাপ ক্রমে)</h3>
-        <div class="chart-wrap">
-            {% for item in chart_data %}
-            <div class="bar-row">
-                <div class="bar-label" title="{{ item.label }}">{{ item.label }}</div>
-                <div class="bar-track">
-                    <div class="bar-fill {{ 'good' if item.value >= 100 else 'bad' }}" style="width: {{ item.width_pct }}%;"></div>
-                </div>
-                <div class="bar-value">{{ item.value }}%</div>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
-    {% endif %}
-
     <div class="card">
         <h3>ফিল্টার করুন</h3>
         <form method="GET" action="/">
@@ -528,28 +503,6 @@ def home():
         "ach_pct": round((total_ach / total_min * 100), 1) if total_min else 0,
     }
 
-    # SR অনুযায়ী গ্রুপ করে ACH% হিসাব করা হচ্ছে (চার্টের জন্য) — সবচেয়ে ভালো থেকে খারাপ ক্রমে সাজানো
-    sr_totals = {}
-    for r in rows:
-        s = r["sr_name"]
-        if s not in sr_totals:
-            sr_totals[s] = {"min_tgt": 0, "ach": 0}
-        sr_totals[s]["min_tgt"] += r["min_tgt"]
-        sr_totals[s]["ach"] += r["ach"]
-
-    sr_pct_list = [
-        (s, round((sr_totals[s]["ach"] / sr_totals[s]["min_tgt"] * 100), 1) if sr_totals[s]["min_tgt"] else 0)
-        for s in sr_totals
-    ]
-    sr_pct_list.sort(key=lambda x: x[1], reverse=True)  # ভালো পারফরম্যান্স আগে
-
-    # প্রতিটা বারের প্রস্থ (%) হিসাব করা হচ্ছে — সবচেয়ে বেশি মান বা ১০০%, যেটা বড় সেটার সাপেক্ষে
-    scale_max = max([p for _, p in sr_pct_list] + [100]) if sr_pct_list else 100
-    chart_data = [
-        {"label": s, "value": p, "width_pct": round(min(p / scale_max * 100, 100), 1)}
-        for s, p in sr_pct_list
-    ]
-
     # প্রোগ্রাম (CLP) লিস্ট — ক্লিক করলে সেই প্রোগ্রামের ডেটা অনুযায়ী পুরো পেজ ফিল্টার হবে
     from urllib.parse import urlencode
     all_clp_values = sorted({r["extra_value"] for r in reports if r.get("extra_value")})
@@ -616,7 +569,6 @@ def home():
         is_admin=(session.get("role") == "admin"),
         db_warning=last_db_error,
         summary=summary,
-        chart_data=chart_data,
         officer_label=officer_label,
         officer_summary=officer_summary,
         sr_prog=sr_prog,
