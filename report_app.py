@@ -10,7 +10,7 @@ app.secret_key = "dev-secret-key"  # সেশন ও flash মেসেজে�
 # দুই ধরনের পাসওয়ার্ড — একটা অ্যাডমিনের জন্য, একটা সাধারণ ভিউয়ারের জন্য
 # চাইলে এখানে সরাসরি বদলাতে পারেন, অথবা Render-এ Environment Variable হিসেবে সেট করতে পারেন (বেশি নিরাপদ)
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
-VIEWER_PASSWORD = os.environ.get("VIEWER_PASSWORD", "view123")
+VIEWER_PASSWORD = os.environ.get("VIEWER_PASSWORD", "12345678")
 
 LOGIN_PAGE = """
 <!DOCTYPE html>
@@ -316,21 +316,41 @@ PAGE = """
     {% if officer_summary %}
     <div class="card">
         <h3>👔 প্রোগ্রাম অনুযায়ী {{ officer_label }}-এর আউটলেট ও টার্গেট অর্জন</h3>
+        <form method="GET" action="/" style="margin-bottom:10px;">
+            {% for k, v in card_hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+            <div class="filter-bar">
+                <div><label>প্রোগ্রাম নেম</label>
+                    <select name="sr_prog" onchange="this.form.submit()">
+                        <option value="">সব প্রোগ্রাম (সারসংক্ষেপ)</option>
+                        {% for pn in sr_prog_options %}
+                        <option value="{{ pn }}" {{ 'selected' if pn == sr_prog }}>{{ pn }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <noscript><div><button type="submit">দেখুন</button></div></noscript>
+            </div>
+        </form>
         <p style="font-size:12px; color:#888; margin:0 0 10px;">
-            "টার্গেট অর্জিত" মানে ACH ≥ MIN TGT। একটা আউটলেটে একাধিক নাম থাকলে (কমা দিয়ে) প্রত্যেকের হিসাবে আউটলেটটা গণনা হয়।
+            {% if sr_prog %}
+            "টার্গেট অর্জিত" মানে ACH ≥ MIN TGT। একটা আউটলেটে একাধিক {{ officer_label }} নাম থাকলে (কমা দিয়ে) প্রত্যেকের হিসাবে আউটলেটটা গণনা হয়।
+            {% else %}
+            একটা প্রোগ্রাম বেছে নিলে (বা নামে ক্লিক করলে) তার {{ officer_label }} তালিকা এখানে আসবে।
+            {% endif %}
         </p>
         <div class="table-scroll">
         <table>
             <tr>
-                <th>প্রোগ্রাম / {{ officer_label }}</th><th>মোট আউটলেট</th><th>টার্গেট অর্জিত</th>
+                <th>{{ ('প্রোগ্রাম / ' ~ officer_label) if sr_prog else 'প্রোগ্রাম' }}</th><th>মোট আউটলেট</th><th>টার্গেট অর্জিত</th>
                 <th>অর্জিত নয়</th><th>অর্জনের হার</th><th></th>
             </tr>
             {% for p in officer_summary %}
             <tr class="prog-row">
-                <td>{{ p.program }}</td><td>{{ p.total }}</td><td>{{ p.achieved }}</td>
+                <td>{% if sr_prog %}{{ p.program }}{% else %}<a href="{{ p.url }}" style="color:#2c3e50;">{{ p.program }}</a>{% endif %}</td>
+                <td>{{ p.total }}</td><td>{{ p.achieved }}</td>
                 <td>{{ p.total - p.achieved }}</td><td>{{ p.pct }}%</td>
                 <td><div class="mini-track"><div class="mini-fill" style="width: {{ p.pct }}%;"></div></div></td>
             </tr>
+            {% if sr_prog %}
             {% for o in p.officers %}
             <tr>
                 <td class="officer-name">{{ o.name }}</td><td>{{ o.total }}</td><td>{{ o.achieved }}</td>
@@ -338,6 +358,7 @@ PAGE = """
                 <td><div class="mini-track"><div class="mini-fill" style="width: {{ o.pct }}%;"></div></div></td>
             </tr>
             {% endfor %}
+            {% endif %}
             {% endfor %}
         </table>
         </div>
@@ -364,6 +385,7 @@ PAGE = """
     <div class="card">
         <h3>ফিল্টার করুন</h3>
         <form method="GET" action="/">
+            <input type="hidden" name="sr_prog" value="{{ sr_prog }}">
             <div class="filter-bar">
                 <div><label>{{ clp_label }}</label>
                     <select name="clp">
@@ -474,6 +496,7 @@ def home():
     sr_name = request.args.get("sr_name", "")
     fse_name = request.args.get("fse_name", "")
     clp = request.args.get("clp", "")
+    sr_prog = request.args.get("sr_prog", "")  # SR কার্ডের নিজস্ব প্রোগ্রাম ফিল্টার
 
     filtered = reports
     if clp:
@@ -532,12 +555,12 @@ def home():
     all_clp_values = sorted({r["extra_value"] for r in reports if r.get("extra_value")})
     program_links = []
     for c in all_clp_values:
-        args = {"town": town, "section": section, "sr_name": sr_name, "fse_name": fse_name, "clp": c}
+        args = {"town": town, "section": section, "sr_name": sr_name, "fse_name": fse_name, "clp": c, "sr_prog": sr_prog}
         args = {k: v for k, v in args.items() if v}
         program_links.append({"value": c, "url": "/?" + urlencode(args), "active": c == clp})
 
     # "সব প্রোগ্রাম" লিংক — clp ফিল্টার সরিয়ে বাকি ফিল্টার রেখে দেখাবে
-    clear_clp_args = {k: v for k, v in {"town": town, "section": section, "sr_name": sr_name, "fse_name": fse_name}.items() if v}
+    clear_clp_args = {k: v for k, v in {"town": town, "section": section, "sr_name": sr_name, "fse_name": fse_name, "sr_prog": sr_prog}.items() if v}
     clear_clp_url = "/?" + urlencode(clear_clp_args) if clear_clp_args else "/"
 
     # প্রোগ্রাম অনুযায়ী সেলস অফিসারের আউটলেট সংখ্যা ও টার্গেট-অর্জিত আউটলেট সংখ্যা
@@ -569,6 +592,15 @@ def home():
             "pct": pct(p["achieved"], p["total"]), "officers": officers,
         })
 
+    base_args = {k: v for k, v in {"town": town, "section": section, "sr_name": sr_name, "fse_name": fse_name, "clp": clp}.items() if v}
+    sr_prog_options = [p["program"] for p in officer_summary]
+    if sr_prog not in sr_prog_options:
+        sr_prog = ""
+    for p in officer_summary:
+        p["url"] = "/?" + urlencode({**base_args, "sr_prog": p["program"]})
+    if sr_prog:
+        officer_summary = [p for p in officer_summary if p["program"] == sr_prog]
+
     return render_template_string(
         PAGE,
         rows=rows,
@@ -587,6 +619,9 @@ def home():
         chart_data=chart_data,
         officer_label=officer_label,
         officer_summary=officer_summary,
+        sr_prog=sr_prog,
+        sr_prog_options=sr_prog_options,
+        card_hidden=base_args,
     )
 
 
