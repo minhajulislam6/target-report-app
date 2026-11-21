@@ -217,6 +217,11 @@ PAGE = """
         .program-chip { padding: 7px 14px; border-radius: 20px; background: #eef2f7; color: #2c3e50; text-decoration: none; font-size: 13px; border: 1px solid #dde3ea; }
         .program-chip:hover { background: #dbe6f5; }
         .program-chip.active { background: #3498db; color: white; border-color: #3498db; }
+        .table-scroll { overflow-x: auto; }
+        tr.prog-row td { background: #eaf1fb; font-weight: bold; color: #2c3e50; }
+        td.officer-name { padding-left: 28px; }
+        .mini-track { background: #eef1f5; border-radius: 4px; height: 12px; min-width: 90px; overflow: hidden; }
+        .mini-fill { background: #3498db; height: 100%; }
     </style>
 </head>
 <body>
@@ -304,6 +309,37 @@ PAGE = """
             {% for p in program_links %}
             <a class="program-chip {{ 'active' if p.active }}" href="{{ p.url }}">{{ p.value }}</a>
             {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if officer_summary %}
+    <div class="card">
+        <h3>👔 প্রোগ্রাম অনুযায়ী {{ officer_label }}-এর আউটলেট ও টার্গেট অর্জন</h3>
+        <p style="font-size:12px; color:#888; margin:0 0 10px;">
+            "টার্গেট অর্জিত" মানে ACH ≥ MIN TGT। একটা আউটলেটে একাধিক নাম থাকলে (কমা দিয়ে) প্রত্যেকের হিসাবে আউটলেটটা গণনা হয়।
+        </p>
+        <div class="table-scroll">
+        <table>
+            <tr>
+                <th>প্রোগ্রাম / {{ officer_label }}</th><th>মোট আউটলেট</th><th>টার্গেট অর্জিত</th>
+                <th>অর্জিত নয়</th><th>অর্জনের হার</th><th></th>
+            </tr>
+            {% for p in officer_summary %}
+            <tr class="prog-row">
+                <td>{{ p.program }}</td><td>{{ p.total }}</td><td>{{ p.achieved }}</td>
+                <td>{{ p.total - p.achieved }}</td><td>{{ p.pct }}%</td>
+                <td><div class="mini-track"><div class="mini-fill" style="width: {{ p.pct }}%;"></div></div></td>
+            </tr>
+            {% for o in p.officers %}
+            <tr>
+                <td class="officer-name">{{ o.name }}</td><td>{{ o.total }}</td><td>{{ o.achieved }}</td>
+                <td>{{ o.total - o.achieved }}</td><td>{{ o.pct }}%</td>
+                <td><div class="mini-track"><div class="mini-fill" style="width: {{ o.pct }}%;"></div></div></td>
+            </tr>
+            {% endfor %}
+            {% endfor %}
+        </table>
         </div>
     </div>
     {% endif %}
@@ -412,6 +448,17 @@ PAGE = """
 """
 
 
+def split_names(value):
+    """'A, B, C' ধরনের একাধিক নাম আলাদা করে লিস্ট বানায়। খালি হলে ['(অনির্ধারিত)'] দেয়।"""
+    names = [n.strip() for n in (value or "").split(",")]
+    names = [n for n in names if n]
+    return names or ["(অনির্ধারিত)"]
+
+
+def pct(part, whole):
+    return round(part / whole * 100, 1) if whole else 0
+
+
 def enrich(r):
     """GAP এবং ACH% হিসাব করে ডিকশনারিতে যোগ করে দেয়।"""
     r = dict(r)
@@ -493,6 +540,35 @@ def home():
     clear_clp_args = {k: v for k, v in {"town": town, "section": section, "sr_name": sr_name, "fse_name": fse_name}.items() if v}
     clear_clp_url = "/?" + urlencode(clear_clp_args) if clear_clp_args else "/"
 
+    # প্রোগ্রাম অনুযায়ী সেলস অফিসারের আউটলেট সংখ্যা ও টার্গেট-অর্জিত আউটলেট সংখ্যা
+    # "টার্গেট অর্জিত" = ACH >= MIN TGT (MIN TGT শূন্য হলে অর্জিত ধরা হয় না)
+    officer_field = "sr_name"
+    officer_label = "SR"
+    prog_map = {}
+    for r in rows:
+        prog = r.get("extra_value") or "(প্রোগ্রাম নেই)"
+        achieved = 1 if (r["min_tgt"] > 0 and r["ach"] >= r["min_tgt"]) else 0
+        p = prog_map.setdefault(prog, {"total": 0, "achieved": 0, "officers": {}})
+        p["total"] += 1
+        p["achieved"] += achieved
+        for name in split_names(r.get(officer_field)):
+            o = p["officers"].setdefault(name, {"total": 0, "achieved": 0})
+            o["total"] += 1
+            o["achieved"] += achieved
+
+    officer_summary = []
+    for prog in sorted(prog_map):
+        p = prog_map[prog]
+        officers = [
+            {"name": n, "total": o["total"], "achieved": o["achieved"], "pct": pct(o["achieved"], o["total"])}
+            for n, o in p["officers"].items()
+        ]
+        officers.sort(key=lambda x: (-x["total"], x["name"]))  # বেশি আউটলেট যার, সে আগে
+        officer_summary.append({
+            "program": prog, "total": p["total"], "achieved": p["achieved"],
+            "pct": pct(p["achieved"], p["total"]), "officers": officers,
+        })
+
     return render_template_string(
         PAGE,
         rows=rows,
@@ -509,6 +585,8 @@ def home():
         db_warning=last_db_error,
         summary=summary,
         chart_data=chart_data,
+        officer_label=officer_label,
+        officer_summary=officer_summary,
     )
 
 
